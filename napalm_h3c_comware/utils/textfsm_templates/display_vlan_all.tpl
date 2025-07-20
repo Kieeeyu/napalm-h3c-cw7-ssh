@@ -5,7 +5,6 @@ Value DESCRIPTION (.*)
 Value List INTERFACES (\w+\S+\d+)
 
 Start
-  # 在没有匹配到下一个 VLAN 信息块之前，不进行记录操作
   ^\s+VLAN\s+ID -> Continue.Record
   ^\s+VLAN\s+ID:\s+${VLAN_ID}
   ^\s+VLAN\s+type:\s+${TYPE}

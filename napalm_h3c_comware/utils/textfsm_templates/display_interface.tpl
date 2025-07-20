@@ -15,7 +15,6 @@ Value LAST_FLAPPING (.+)
 Value PRIMARY_IPADDR (\d+\.\d+\.\d+\.\d+/\d+)
 
 Start
-  # 接口名所在行是一个独立的字符串，以此开始记录
   ^\S+\s*$$ -> Continue.Record
   ^${INTERFACE}\s*$$
   ^(C|c)urrent\s+state:\s+${LINK_STATUS}

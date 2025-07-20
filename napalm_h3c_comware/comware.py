@@ -18,6 +18,7 @@ Napalm driver for H3C ComwareV7 devices.
 Read https://napalm.readthedocs.io for more information.
 """
 
+import ipaddress
 from operator import itemgetter
 from collections import defaultdict
 from typing import Any, Optional, Dict, List
@@ -56,6 +57,8 @@ class ComwareDriver(NetworkDriver):
         self.password = password
         self.timeout = timeout
         self.netmiko_optional_args = netmiko_args(optional_args)
+        # 设置 force_no_enable 属性
+        self.force_no_enable = True
 
     def open(self):
         """Open a connection to the device."""
@@ -554,7 +557,208 @@ class ComwareDriver(NetworkDriver):
 
         return mac_address_table
 
-    def get_route_to(self, destination="", protocol="", longer=False): ...
+    # 本地使用
+    def _get_vrfs(self):
+        vrfs = {}
+        command = "display ip vpn-instance"
+        structured_output = self._get_structured_output(command)
+        if structured_output:
+            vrf_names = [vrf_entry.get("name") for vrf_entry in structured_output]
+            commands = [f"display ip vpn-instance instance-name {vrf_name}" for vrf_name in vrf_names]
+            for cmd in commands:
+                structured_output = self._get_structured_output(cmd, "display_ip_vpn-instance_instance-name")
+                for vrf_entry in structured_output:
+                    (name, id, description, rd, interfaces) = itemgetter(
+                        "name", "id", "description", "rd", "interfaces"
+                    )(vrf_entry)
+                    entry = {
+                        "id": int(id),
+                        "description": description,
+                        "route_distinguisher": rd,
+                        "interfaces": interfaces
+                    }
+                if vrfs.get(name) is None:
+                    vrfs[name] = [entry]
+                else:
+                    vrfs[name].append(entry)
+        return vrfs
+    
+    # 本地使用，未完全实现父类接口，仅支持IPv4
+    def get_route_to(self, destination="", protocol="", longer=False):
+        """
+        Example::
+
+            {
+            "10.1.1.0/24": [
+                {
+                "outgoing_interface": "Loop1",
+                "next_hop": "172.16.1.0",
+                "protocol": "Static",
+                "preference": "60",
+                "cost": "0",
+                }
+            ]
+            }
+        """
+        # Not Supported
+        if longer:
+            raise NotImplementedError("Longer prefixes not yet supported for Comware")
+        routes = {}
+        if destination == "":
+            command = "display ip routing-table"
+        else:
+            try:
+                ip_version = ipaddress.ip_network(destination).version
+            except ValueError:
+                return "Please specify a valid destination!"
+            if ip_version == 4:  # process IPv4 routing table
+                if "/" in destination:
+                    ipnet_dest = ipaddress.ip_network(destination)
+                    prefix = str(ipnet_dest.network_address)
+                    netmask = str(ipnet_dest.netmask)
+                    command = f"display ip routing-table {prefix} {netmask}"
+                else:
+                    command = f"display ip routing-table {destination}"
+        structured_output = self._get_structured_output(command, "display_ip_routing-table")
+        for route_entry in structured_output:
+            (preference,
+            cost,
+            network,
+            nexthop_if,
+            nexthop_ip,
+            prefix_length,
+            protocol) = itemgetter(
+                "preference",
+                "cost",
+                "network",
+                "nexthop_if",
+                "nexthop_ip",
+                "prefix_length",
+                "protocol")(route_entry)
+            entry = {
+                "outgoing_interface": nexthop_if,
+                "next_hop": nexthop_ip,
+                "protocol": protocol,                
+                "preference": preference,
+                "cost": cost,
+            }
+            dst_net = f"{network}/{prefix_length}"
+            routes[dst_net] = entry
+        return routes
+    
+        # 本地使用，未完全实现父类接口，仅支持IPv4
+    def get_route_vrf_to(self, destination="", protocol="", longer=False):
+        """
+        Example::
+
+            {
+            "10.1.1.0/24": [
+                {
+                "preference": "60",
+                "cost": "0",
+                "outgoing_interface": "Loop1",
+                "next_hop": "172.16.1.0",
+                "protocol": "Static",
+                }
+            ]
+            }
+        """
+        # Not Supported
+        if longer:
+            raise NotImplementedError("Longer prefixes not yet supported for Comware")
+        routes = {}
+        # Placeholder for vrf arg
+        vrf = ""
+        if vrf == "":
+            _vrfs = self._get_vrfs()
+            vrfs = list(_vrfs.keys())
+        if destination == "":
+            command = "display ip routing-table"
+        else:
+            try:
+                ip_version = ipaddress.ip_network(destination).version
+            except ValueError:
+                return "Please specify a valid destination!"
+            if ip_version == 4:  # process IPv4 routing table
+                if "/" in destination:
+                    ipnet_dest = ipaddress.ip_network(destination)
+                    prefix = str(ipnet_dest.network_address)
+                    netmask = str(ipnet_dest.netmask)
+                    command = f"display ip routing-table {prefix} {netmask}"
+                else:
+                    command = f"display ip routing-table {destination}"
+        structured_output = self._get_structured_output(command, "display_ip_routing-table")
+        for route_entry in structured_output:
+            (preference,
+            cost,
+            network,
+            nexthop_if,
+            nexthop_ip,
+            prefix_length,
+            protocol) = itemgetter(
+                "preference",
+                "cost",
+                "network",
+                "nexthop_if",
+                "nexthop_ip",
+                "prefix_length",
+                "protocol")(route_entry)
+            entry = {
+                "outgoing_interface": nexthop_if,
+                "next_hop": nexthop_ip,
+                "protocol": protocol,                
+                "preference": preference,
+                "cost": cost,
+            }
+            dst_net = f"{network}/{prefix_length}"
+            if "N/A" not in routes:
+                routes["N/A"] = {}
+            routes["N/A"][dst_net] = entry
+        if vrfs:
+            if destination == "":
+                commands = [f"display ip routing-table vpn-instance {vrf}" for vrf in vrfs]
+            else:
+                try:
+                    ip_version = ipaddress.ip_network(destination).version
+                except ValueError:
+                    return "Please specify a valid destination!"
+                if ip_version == 4:  # process IPv4 routing table
+                    if "/" in destination:
+                        ipnet_dest = ipaddress.ip_network(destination)
+                        prefix = str(ipnet_dest.network_address)
+                        netmask = str(ipnet_dest.netmask)
+                        commands = [f"display ip routing-table vpn-instance {vrf} {prefix} {netmask}" for vrf in vrfs]
+                    else:
+                        commands = [f"display ip routing-table vpn-instance {vrf} {destination}" for vrf in vrfs]
+            for command, vrf in zip(commands, vrfs):
+                structured_output = self._get_structured_output(command, "display_ip_routing-table")
+                for route_entry in structured_output:
+                    (preference,
+                    cost,
+                    network,
+                    nexthop_if,
+                    nexthop_ip,
+                    prefix_length,
+                    protocol) = itemgetter(
+                        "preference",
+                        "cost",
+                        "network",
+                        "nexthop_if",
+                        "nexthop_ip",
+                        "prefix_length",
+                        "protocol")(route_entry)
+                    entry = {
+                        "outgoing_interface": nexthop_if,
+                        "next_hop": nexthop_ip,
+                        "protocol": protocol,                
+                        "preference": preference,
+                        "cost": cost,
+                    }
+                    dst_net = f"{network}/{prefix_length}"
+                    if vrf not in routes:
+                        routes[vrf] = {}
+                    routes[vrf][dst_net] = entry
+        return routes
 
     def get_config(self, retrieve="all", full=False, sanitized=False):
         configs = {"startup": "", "running": "", "candidate": ""}
@@ -647,3 +851,40 @@ class ComwareDriver(NetworkDriver):
             return {"is_irf": True}
         else:
             return {"is_irf": False}
+        
+    # 本地使用
+    def get_transceivers(self):
+        transceiver_dict = {}
+        structured_transceiver = self._get_structured_output("display transceiver interface")
+        structured_trans_sn  = self._get_structured_output("display transceiver manuinfo interface")
+
+        for transceiver in structured_transceiver:
+            (interface,
+            transceiver_type,
+            connector,
+            wavelength,
+            distance,
+            ddm,
+            vendor) = itemgetter(
+                "interface",
+                "transceiver_type",
+                "connector",
+                "wavelength",
+                "distance",
+                "ddm",
+                "vendor")(transceiver)
+
+            is_absent = not bool(transceiver_type)
+
+            transceiver_dict[interface] = {
+                "is_absent": is_absent,
+                "type": transceiver_type,
+                "vendor": vendor,
+            }
+        
+        for trans_sn in structured_trans_sn:
+            interface = trans_sn.get("interface")
+            serial_number = trans_sn.get("transceiver_serial_number")
+            transceiver_dict[interface]["serial_number"] = serial_number
+
+        return transceiver_dict
